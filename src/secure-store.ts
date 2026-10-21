@@ -1,15 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-/**
- * `require` that works in both the ESM and CJS builds. In CJS `require` is a
- * global; in ESM it is synthesised from the module URL.
- */
-const nodeRequire =
-	typeof require === "function" ? require : createRequire(import.meta.url);
+import { nodeRequire } from "./node-require.js";
 
 /** Keyring service shared by every app embedding the SDK. */
 const KEYRING_SERVICE = "dev.licensemanager.sdk";
@@ -18,6 +11,7 @@ const KEYRING_SERVICE = "dev.licensemanager.sdk";
 interface KeyringEntry {
 	getPassword(): string | null;
 	setPassword(password: string): void;
+	deletePassword?(): boolean;
 }
 
 export type EntryCtor = new (service: string, account: string) => KeyringEntry;
@@ -54,7 +48,7 @@ export function setKeyringLoaderForTests(
 
 /**
  * Per-product persistence for small secret strings (install ID, last-seen
- * timestamp).
+ * timestamp, license key and token).
  *
  * Primary backend is the OS secret store via `@napi-rs/keyring` (macOS
  * Keychain, Windows Credential Manager, Linux Secret Service). When the
@@ -88,6 +82,21 @@ export class SecureStore {
 	set(key: string, value: string): void {
 		this.#keyringSet(key, value);
 		this.#fileSet(key, value);
+	}
+
+	delete(key: string): void {
+		try {
+			this.#entry(key)?.deletePassword?.();
+		} catch {
+			// best effort; files are still removed
+		}
+		for (const dir of this.#dirs) {
+			try {
+				rmSync(join(dir, fileName(key)), { force: true });
+			} catch {
+				// best effort per location
+			}
+		}
 	}
 
 	#entry(key: string): KeyringEntry | null {

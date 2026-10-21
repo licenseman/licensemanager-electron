@@ -21,13 +21,16 @@ const LAST_SEEN_KEY = "lastSeen";
 export class ClockGuard {
 	readonly #store: SecureStore;
 
+	/** Resolves once the initial check has completed. Never rejects. */
+	readonly ready: Promise<void>;
+
 	#tampered = false;
 	#timer: NodeJS.Timeout | undefined;
 
 	constructor(store: SecureStore) {
 		this.#store = store;
 
-		void this.#check();
+		this.ready = this.#check();
 		this.#timer = setInterval(() => {
 			void this.#check();
 		}, CLOCK_CHECK_INTERVAL_MS);

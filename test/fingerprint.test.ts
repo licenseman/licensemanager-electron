@@ -88,8 +88,8 @@ describe("readMachineId default resolver", () => {
 		execFileMock.mockImplementation((_f, _a, _o, cb) => cb(new Error("boom")));
 		const value = await readMachineId();
 		expect(value).toBeTruthy();
-		// Fallback is a MAC address or hostname, never the hex digest form.
-		expect(value).not.toMatch(/^[0-9a-f]{64}$/);
+		// Fallback is a MAC address or hostname, never the digest form.
+		expect(value).not.toMatch(/^[A-Za-z0-9+/]{43}=$/);
 	});
 
 	it("falls back when the macOS UUID is present but empty", async () => {
@@ -116,9 +116,9 @@ describe("readMachineId default resolver", () => {
 });
 
 describe("hashMachineValue", () => {
-	it("is a stable sha256 hex digest", () => {
+	it("is a stable base64 sha256 digest", () => {
 		expect(hashMachineValue("x")).toBe(
-			createHash("sha256").update("x").digest("hex"),
+			createHash("sha256").update("x").digest("base64"),
 		);
 	});
 });

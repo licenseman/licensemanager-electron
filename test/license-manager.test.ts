@@ -2,12 +2,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hashMachineValue } from "../src/fingerprint";
 import { LicenseManager } from "../src/license-manager";
 import {
 	type EntryCtor,
 	SecureStore,
 	setKeyringLoaderForTests,
 } from "../src/secure-store";
+
+/** `<base64 sha256 of machine>:<base64 install ID>:<productId>` */
+const fingerprintPattern = (productId: string) =>
+	new RegExp(`^[A-Za-z0-9+/]{43}=:[A-Za-z0-9+/]{43}=:${productId}$`);
 
 let dir: string;
 let manager: LicenseManager | undefined;
@@ -67,10 +72,10 @@ describe("constructor validation", () => {
 });
 
 describe("getFingerprint", () => {
-	it("is a stable sha256 hex digest", async () => {
+	it("is stable and mixes machine, install ID and product", async () => {
 		const lm = make();
 		const fp = await lm.getFingerprint();
-		expect(fp).toMatch(/^[0-9a-f]{64}$/);
+		expect(fp).toMatch(fingerprintPattern("prod-1"));
 		expect(await lm.getFingerprint()).toBe(fp);
 	});
 
@@ -96,7 +101,9 @@ describe("getFingerprint", () => {
 			storageDirs: [dir],
 		});
 		manager = lm;
-		expect(await lm.getFingerprint()).toMatch(/^[0-9a-f]{64}$/);
+		const fp = await lm.getFingerprint();
+		expect(fp).toMatch(fingerprintPattern("p"));
+		expect(fp.startsWith(`${hashMachineValue("custom")}:`)).toBe(true);
 	});
 });
 

@@ -45,6 +45,15 @@ describe("SecureStore file fallback", () => {
 		expect(store.get("installId")).toBe("secret");
 	});
 
+	it("deletes a value from every location", () => {
+		const store = new SecureStore("prod-1", [dirA, dirB]);
+		store.set("installId", "secret");
+		store.delete("installId");
+		expect(store.get("installId")).toBeNull();
+		// Deleting a missing value is a no-op.
+		expect(() => store.delete("installId")).not.toThrow();
+	});
+
 	it("isolates different productIds", () => {
 		const a = new SecureStore("prod-a", [dirA]);
 		const b = new SecureStore("prod-b", [dirB]);

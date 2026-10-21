@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
  */
 export type MachineFingerprint = string | (() => string | Promise<string>);
 
-/** Hash a raw machine value into a stable, opaque hex digest. */
+/** Hash a raw machine value into a stable, opaque base64 digest. */
 export function hashMachineValue(raw: string): string {
 	return createHash("sha256").update(raw).digest("base64");
 }
@@ -113,7 +113,7 @@ function fallbackMachineId(): string {
 
 /**
  * Resolve the machine component of the fingerprint from the user option,
- * returning its sha256 hex digest.
+ * returning its base64 sha256 digest.
  */
 export async function resolveMachineFingerprint(
 	option?: MachineFingerprint,
