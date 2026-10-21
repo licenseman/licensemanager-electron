@@ -58,11 +58,20 @@ license.dispose();
 
 Subscribe with `onStateChange(listener)`, which returns an unsubscribe function.
 
+`getPortalUrl()` returns the link to the customer portal for your product
+(`https://app.licensemanager.dev/portal/<productId>`), e.g. to let customers
+manage or renew their license.
+
 ### Validation
 
 The stored key is validated online on every launch. The token the server
 returns is a JWT, verified like an offline token (EdDSA signature, product,
 key, machine fingerprint and expiry) and stored in the OS secret store.
+
+When the stored token is valid, `ready()` resolves with `ACTIVE` right away
+and the online validation runs in the background; a refused license then
+switches the state through `onStateChange`. Otherwise `ready()` waits for the
+server.
 
 `setLicenseKey(key)` validates a key the user typed (trimmed, case kept) and
 stores it only on success. On failure it throws a `LicenseError` whose `code`
@@ -82,6 +91,12 @@ The key is re-validated in the background at 2/3 of the token lifetime. Set
 offline time remains; it never moves re-validation within 1 day of the last
 one. While offline, retries back off from 5 minutes to 1 hour. Call
 `refresh()` to re-validate on demand, e.g. after the customer renewed.
+
+Each validation retries transient failures (network errors, timeouts, 408,
+429 and 5xx) with exponential backoff and jitter: for up to 30 seconds when a
+caller is waiting (startup without a valid stored token, `setLicenseKey()`,
+`refresh()`), and up to 5 minutes for background validations. Answers about the key are never
+retried.
 
 `version` (defaults to Electron's `app.getVersion()`) and `platform` (macOS,
 Windows or Linux by default) are sent with every validation, along with

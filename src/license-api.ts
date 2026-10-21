@@ -25,6 +25,7 @@ export interface ValidateKeyRequest {
 /**
  * Call validate-key and return the unverified license token.
  *
+ * @param timeoutMs Request timeout, capped at 10 seconds.
  * @throws {LicenseError} when the server can't be reached, refuses the key or
  *   returns no token.
  */
@@ -32,6 +33,7 @@ export async function postValidateKey(
 	apiBaseUrl: string,
 	productId: string,
 	request: ValidateKeyRequest,
+	timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<{ token: string; status: number }> {
 	let res: Response;
 	try {
@@ -41,7 +43,9 @@ export async function postValidateKey(
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(request),
-				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+				signal: AbortSignal.timeout(
+					Math.max(0, Math.min(timeoutMs, REQUEST_TIMEOUT_MS)),
+				),
 			},
 		);
 	} catch (cause) {
@@ -64,6 +68,17 @@ export async function postValidateKey(
 		);
 	}
 	return { token, status: res.status };
+}
+
+/**
+ * Whether a failed validate-key call may succeed if repeated: the server was
+ * unreachable, overloaded or failing. Answers about the key are final.
+ */
+export function isTransientError(error: unknown): boolean {
+	if (!(error instanceof LicenseError)) return false;
+	const { code, status } = error;
+	if (status === undefined) return code === "network_error";
+	return status >= 500 || status === 408 || status === 429;
 }
 
 /** Map an error response to a {@link LicenseError}, branching on `code` only. */

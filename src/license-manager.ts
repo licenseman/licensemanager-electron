@@ -6,7 +6,11 @@ import {
 	type MachineFingerprint,
 	resolveMachineFingerprint,
 } from "./fingerprint.js";
-import { DEFAULT_API_BASE_URL, postValidateKey } from "./license-api.js";
+import {
+	DEFAULT_API_BASE_URL,
+	isTransientError,
+	postValidateKey,
+} from "./license-api.js";
 import {
 	isLockingCode,
 	LicenseError,
@@ -24,6 +28,7 @@ import {
 	TokenVerifier,
 	type ValidatedToken,
 } from "./license-token.js";
+import { type RetryPolicy, withRetry } from "./retry.js";
 import { SecureStore } from "./secure-store.js";
 import { isVersionAllowed } from "./version.js";
 
@@ -31,12 +36,33 @@ const INSTALL_ID_KEY = "installId";
 const LICENSE_KEY_KEY = "licenseKey";
 const LICENSE_TOKEN_KEY = "licenseToken";
 
+const PORTAL_BASE_URL = "https://app.licensemanager.dev/portal";
+
 const MINUTE = 60 * 1000;
-/** Retry backoff while the server is unreachable. */
+/** Retry backoff between scheduled re-validations while the server is unreachable. */
 const RETRY_INITIAL_MS = 5 * MINUTE;
 const RETRY_MAX_MS = 60 * MINUTE;
-/** Longest delay `setTimeout` accepts (~24.8 days); longer waits are re-armed. */
-const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+/**
+ * Retries of a single validation on transient failures. Kept short when a
+ * caller is waiting on the result (startup without a valid stored token,
+ * `setLicenseKey`, `refresh`).
+ */
+const INTERACTIVE_RETRY: RetryPolicy = {
+	initialDelayMs: 500,
+	maxDelayMs: 5000,
+	budgetMs: 30 * 1000,
+};
+const BACKGROUND_RETRY: RetryPolicy = {
+	initialDelayMs: 2000,
+	maxDelayMs: MINUTE,
+	budgetMs: 5 * MINUTE,
+};
+/**
+ * Longest single timer. Longer waits are re-armed in steps, re-checking the
+ * wall clock each time, so system sleep or clock changes can't push a
+ * validation far past its target date.
+ */
+const MAX_TIMEOUT_MS = 60 * MINUTE;
 
 export interface LicenseManagerOptions {
 	/** Identifies the product. */
@@ -73,7 +99,8 @@ export interface LicenseManagerOptions {
  * Entry point for the licensemanager.dev Electron SDK.
  *
  * Instantiate once and treat as a singleton. On construction it validates the
- * stored license key and begins a periodic clock-tamper check; call
+ * stored license key (in the background when the stored token is valid) and
+ * begins a periodic clock-tamper check; call
  * {@link dispose} to stop background work.
  */
 export class LicenseManager {
@@ -100,7 +127,11 @@ export class LicenseManager {
 	#latestAllowedVersion: string | null | undefined;
 	#retryDelayMs = RETRY_INITIAL_MS;
 	#timer: NodeJS.Timeout | undefined;
-	#inflight: { key: string; promise: Promise<ValidatedToken> } | undefined;
+	#inflight:
+		| { key: string; policy: RetryPolicy; promise: Promise<ValidatedToken> }
+		| undefined;
+	/** Aborted on dispose, to stop pending retries. */
+	readonly #abort = new AbortController();
 	#disposed = false;
 
 	constructor(options: LicenseManagerOptions) {
@@ -146,7 +177,11 @@ export class LicenseManager {
 		return this.#state;
 	}
 
-	/** Resolves with the state once startup validation has completed. */
+	/**
+	 * Resolves with the state once startup validation has completed, or as
+	 * soon as the stored token is found valid; the online validation then
+	 * continues in the background.
+	 */
 	ready(): Promise<LicenseState> {
 		return this.#ready;
 	}
@@ -162,6 +197,11 @@ export class LicenseManager {
 	/** The stored license key, or null before one was set. */
 	getLicenseKey(): string | null {
 		return this.#key;
+	}
+
+	/** Link to the customer portal for this product. */
+	getPortalUrl(): string {
+		return `${PORTAL_BASE_URL}/${encodeURIComponent(this.#productId)}`;
 	}
 
 	/**
@@ -205,7 +245,7 @@ export class LicenseManager {
 			throw new LicenseError("validation_error", "The license key is empty");
 		}
 
-		const validated = await this.#request(key);
+		const validated = await this.#request(key, INTERACTIVE_RETRY);
 		this.#store.set(LICENSE_KEY_KEY, key);
 		this.#key = key;
 		this.#activate(validated);
@@ -219,7 +259,7 @@ export class LicenseManager {
 	async refresh(): Promise<LicenseState> {
 		await this.#ready;
 		if (!this.#key) return this.#state;
-		return this.#revalidate(this.#key);
+		return this.#revalidate(this.#key, INTERACTIVE_RETRY);
 	}
 
 	/** True once a backwards clock jump has been observed. */
@@ -230,6 +270,7 @@ export class LicenseManager {
 	/** Stop the periodic clock check and scheduled re-validations. */
 	dispose(): void {
 		this.#disposed = true;
+		this.#abort.abort();
 		this.#clearTimer();
 		this.#clock.dispose();
 	}
@@ -239,17 +280,27 @@ export class LicenseManager {
 			this.#setState("MISSING_KEY");
 			return this.#state;
 		}
-		return this.#revalidate(this.#key);
+		const key = this.#key;
+		const stored = await this.#checkStoredToken(key);
+		if (this.#key !== key) return this.#state;
+		if (stored.state !== "ACTIVE") {
+			return this.#revalidate(key, INTERACTIVE_RETRY);
+		}
+		this.#token = stored.payload;
+		this.#setState("ACTIVE");
+		// Confirm with the server without holding up startup.
+		void this.#revalidate(key, BACKGROUND_RETRY);
+		return this.#state;
 	}
 
 	/**
 	 * Validate online; on an error that says nothing about the license, fall
 	 * back to the stored token. Never throws.
 	 */
-	async #revalidate(key: string): Promise<LicenseState> {
+	async #revalidate(key: string, policy: RetryPolicy): Promise<LicenseState> {
 		this.#clearTimer();
 		try {
-			const validated = await this.#request(key);
+			const validated = await this.#request(key, policy);
 			if (this.#key !== key) return this.#state;
 			this.#activate(validated);
 		} catch (error) {
@@ -301,30 +352,38 @@ export class LicenseManager {
 	 */
 	async #validateOffline(key: string): Promise<void> {
 		this.#online = false;
-		await this.#clock.ready;
+		const stored = await this.#checkStoredToken(key);
 		if (this.#key !== key) return;
 
-		if (this.#clock.isTampered()) {
-			this.#token = undefined;
-			this.#setState("CLOCK_TAMPERED");
-		} else {
-			const token = this.#store.get(LICENSE_TOKEN_KEY);
-			const payload = token
-				? await this.#verifier.verify(token, key).catch(() => undefined)
-				: undefined;
-			if (this.#key !== key) return;
-			if (payload && !this.#allowsAppVersion(payload)) {
-				// Keep the token: it works again if the app is downgraded.
-				this.#token = undefined;
-				this.#latestAllowedVersion = undefined;
-				this.#setState("VERSION_NOT_ALLOWED");
-			} else {
-				this.#token = payload;
-				this.#setState(payload ? "ACTIVE" : "OFFLINE_EXPIRED");
-			}
+		this.#token = stored.state === "ACTIVE" ? stored.payload : undefined;
+		if (stored.state === "VERSION_NOT_ALLOWED") {
+			this.#latestAllowedVersion = undefined;
 		}
+		this.#setState(stored.state);
 		this.#scheduleNext();
 		this.#retryDelayMs = Math.min(this.#retryDelayMs * 2, RETRY_MAX_MS);
+	}
+
+	/** What the stored token allows without asking the server. */
+	async #checkStoredToken(
+		key: string,
+	): Promise<
+		| { state: "ACTIVE"; payload: TokenPayload }
+		| { state: "CLOCK_TAMPERED" | "VERSION_NOT_ALLOWED" | "OFFLINE_EXPIRED" }
+	> {
+		await this.#clock.ready;
+		if (this.#clock.isTampered()) return { state: "CLOCK_TAMPERED" };
+
+		const token = this.#store.get(LICENSE_TOKEN_KEY);
+		const payload = token
+			? await this.#verifier.verify(token, key).catch(() => undefined)
+			: undefined;
+		if (!payload) return { state: "OFFLINE_EXPIRED" };
+		// Keep the token: it works again if the app is downgraded.
+		if (!this.#allowsAppVersion(payload)) {
+			return { state: "VERSION_NOT_ALLOWED" };
+		}
+		return { state: "ACTIVE", payload };
 	}
 
 	/**
@@ -359,7 +418,7 @@ export class LicenseManager {
 		this.#timer = setTimeout(() => {
 			this.#timer = undefined;
 			if (Date.now() < at) this.#arm(key, at);
-			else void this.#revalidate(key);
+			else void this.#revalidate(key, BACKGROUND_RETRY);
 		}, delay);
 		// Don't keep the host app's event loop alive for this.
 		this.#timer.unref?.();
@@ -372,27 +431,41 @@ export class LicenseManager {
 		}
 	}
 
-	/** Call validate-key, sharing one in-flight request per key. */
-	#request(key: string): Promise<ValidatedToken> {
-		if (this.#inflight?.key === key) return this.#inflight.promise;
-		const promise = this.#fetchToken(key).finally(() => {
+	/**
+	 * Call validate-key, sharing one in-flight request per key and policy, so
+	 * a caller is never held up by a longer background retry budget.
+	 */
+	#request(key: string, policy: RetryPolicy): Promise<ValidatedToken> {
+		const inflight = this.#inflight;
+		if (inflight?.key === key && inflight.policy === policy) {
+			return inflight.promise;
+		}
+		const promise = this.#fetchToken(key, policy).finally(() => {
 			if (this.#inflight?.promise === promise) this.#inflight = undefined;
 		});
-		this.#inflight = { key, promise };
+		this.#inflight = { key, policy, promise };
 		return promise;
 	}
 
-	async #fetchToken(key: string): Promise<ValidatedToken> {
-		const { token, status } = await postValidateKey(
-			this.#apiBaseUrl,
-			this.#productId,
-			{
-				key,
-				fingerprint: await this.getFingerprint(),
-				version: this.#resolveVersion(),
-				name: this.#machineName,
-				platform: this.#platform,
-			},
+	async #fetchToken(key: string, policy: RetryPolicy): Promise<ValidatedToken> {
+		const request = {
+			key,
+			fingerprint: await this.getFingerprint(),
+			version: this.#resolveVersion(),
+			name: this.#machineName,
+			platform: this.#platform,
+		};
+		const { token, status } = await withRetry(
+			(remainingMs) =>
+				postValidateKey(
+					this.#apiBaseUrl,
+					this.#productId,
+					request,
+					remainingMs,
+				),
+			isTransientError,
+			policy,
+			this.#abort.signal,
 		);
 		try {
 			return { token, payload: await this.#verifier.verify(token, key) };

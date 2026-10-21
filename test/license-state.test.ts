@@ -176,6 +176,17 @@ async function advance(ms: number): Promise<void> {
 	await new Promise((resolve) => realSetTimeout(resolve, 30));
 }
 
+/** Await `promise`, advancing fake time so validation retries can run out. */
+async function settle<T>(promise: Promise<T>): Promise<T> {
+	let done = false;
+	const tracked = promise.finally(() => {
+		done = true;
+	});
+	tracked.catch(() => {});
+	while (!done) await advance(5000);
+	return tracked;
+}
+
 function validateCalls(): number {
 	return fetchMock.mock.calls.filter(([url]) =>
 		String(url).includes("/validate-key"),
@@ -196,6 +207,28 @@ describe("startup", () => {
 		expect(lm.getState()).toBe("LOADING");
 		expect(await lm.ready()).toBe("ACTIVE");
 		expect(validateCalls()).toBe(1);
+		expect(lm.getOfflineState()).toEqual({ mode: "online" });
+	});
+
+	it("resolves from a valid stored token without waiting for the server", async () => {
+		await seed();
+		validate = () => new Promise(() => {});
+		const lm = make();
+		expect(await lm.ready()).toBe("ACTIVE");
+		expect(validateCalls()).toBe(1);
+		expect(lm.getOfflineState()).toEqual({ mode: "online" });
+	});
+
+	it("waits for the server without a valid stored token", async () => {
+		await seed(WEEK, START - 2 * WEEK);
+		let calls = 0;
+		validate = async (body) =>
+			++calls < 3
+				? fail(503, "unavailable")
+				: ok(await sign({ sub: body.key, fp: body.fingerprint }));
+		const lm = make();
+		expect(await settle(lm.ready())).toBe("ACTIVE");
+		expect(validateCalls()).toBe(3);
 		expect(lm.getOfflineState()).toEqual({ mode: "online" });
 	});
 
@@ -232,7 +265,10 @@ describe("startup", () => {
 				code === "version_not_allowed" ? { latestAllowedVersion: "2.3.1" } : {},
 			);
 		const lm = make();
-		expect(await lm.ready()).toBe(state);
+		// The stored token is valid: the refusal arrives in the background.
+		expect(await lm.ready()).toBe("ACTIVE");
+		await advance(0);
+		expect(lm.getState()).toBe(state);
 		expect(store().get("licenseToken")).toBeNull();
 		expect(lm.getLicenseKey()).toBe(KEY);
 		if (code === "version_not_allowed") {
@@ -251,18 +287,21 @@ describe("startup", () => {
 		validate = handler as typeof validate;
 		const lm = make();
 		expect(await lm.ready()).toBe("ACTIVE");
+		// Background validation gives up within 5 minutes.
+		for (let i = 0; i < 60; i++) await advance(5000);
+		expect(lm.getState()).toBe("ACTIVE");
 		const expiresAt = START - DAY + 3 * WEEK;
 		expect(lm.getOfflineState()).toEqual({
 			mode: "offline",
 			validUntil: new Date(expiresAt),
-			remainingMs: expiresAt - START,
+			remainingMs: expiresAt - Date.now(),
 		});
 	});
 
 	it("is OFFLINE_EXPIRED when offline with an expired token", async () => {
 		await seed(WEEK, START - 2 * WEEK);
 		const lm = make();
-		expect(await lm.ready()).toBe("OFFLINE_EXPIRED");
+		expect(await settle(lm.ready())).toBe("OFFLINE_EXPIRED");
 		expect(lm.getOfflineState()).toEqual({
 			mode: "offline",
 			validUntil: null,
@@ -273,7 +312,7 @@ describe("startup", () => {
 	it("is OFFLINE_EXPIRED when offline without a token", async () => {
 		await fingerprint();
 		store().set("licenseKey", KEY);
-		expect(await make().ready()).toBe("OFFLINE_EXPIRED");
+		expect(await settle(make().ready())).toBe("OFFLINE_EXPIRED");
 	});
 
 	it("is CLOCK_TAMPERED when offline and the clock went back", async () => {
@@ -282,7 +321,7 @@ describe("startup", () => {
 			"lastSeen",
 			Buffer.from(String(START + DAY)).toString("base64"),
 		);
-		expect(await make().ready()).toBe("CLOCK_TAMPERED");
+		expect(await settle(make().ready())).toBe("CLOCK_TAMPERED");
 	});
 
 	it("trusts the server over a tampered clock", async () => {
@@ -310,7 +349,7 @@ describe("max version (mv) offline", () => {
 		[null, "9.0.0"],
 	])("mv %s allows %s", async (mv, version) => {
 		await seedMaxVersion(mv);
-		expect(await make({ version }).ready()).toBe("ACTIVE");
+		expect(await settle(make({ version }).ready())).toBe("ACTIVE");
 	});
 
 	it.each([
@@ -319,7 +358,7 @@ describe("max version (mv) offline", () => {
 	])("mv %s refuses %s and keeps the token", async (mv, version) => {
 		await seedMaxVersion(mv);
 		const lm = make({ version });
-		expect(await lm.ready()).toBe("VERSION_NOT_ALLOWED");
+		expect(await settle(lm.ready())).toBe("VERSION_NOT_ALLOWED");
 		expect(lm.getLatestAllowedVersion()).toBeUndefined();
 		expect(store().get("licenseToken")).toBeTruthy();
 	});
@@ -327,7 +366,7 @@ describe("max version (mv) offline", () => {
 	it("lets the server override mv once reachable", async () => {
 		await seedMaxVersion("2");
 		const lm = make({ version: "3.0.0" });
-		expect(await lm.ready()).toBe("VERSION_NOT_ALLOWED");
+		expect(await settle(lm.ready())).toBe("VERSION_NOT_ALLOWED");
 
 		// Time-limited updates: the server allows 3.0.0 although an old token said "2".
 		serveValid();
@@ -414,7 +453,7 @@ describe("setLicenseKey", () => {
 	it("throws network_error when offline", async () => {
 		const lm = make();
 		await lm.ready();
-		await expect(lm.setLicenseKey(KEY)).rejects.toMatchObject({
+		await expect(settle(lm.setLicenseKey(KEY))).rejects.toMatchObject({
 			code: "network_error",
 		});
 		expect(lm.getState()).toBe("MISSING_KEY");
@@ -439,6 +478,80 @@ describe("setLicenseKey", () => {
 			code: "validation_error",
 		});
 		expect(validateCalls()).toBe(0);
+	});
+});
+
+describe("retries", () => {
+	it("retries transient failures on setLicenseKey", async () => {
+		const lm = make();
+		await lm.ready();
+		let calls = 0;
+		validate = async (body) =>
+			++calls < 3
+				? fail(503, "unavailable")
+				: ok(await sign({ sub: body.key, fp: body.fingerprint }));
+		expect(await settle(lm.setLicenseKey(KEY))).toBe("ACTIVE");
+		expect(validateCalls()).toBe(3);
+	});
+
+	it.each([
+		[404, "not_found"],
+		[402, "plan_limit_exceeded"],
+		[422, "validation_error"],
+	])("does not retry %i %s", async (status, code) => {
+		const lm = make();
+		await lm.ready();
+		validate = () => fail(status, code);
+		await expect(settle(lm.setLicenseKey(KEY))).rejects.toMatchObject({
+			code,
+		});
+		expect(validateCalls()).toBe(1);
+	});
+
+	it("gives up on setLicenseKey within 30 seconds", async () => {
+		const lm = make();
+		await lm.ready();
+		const startedAt = Date.now();
+		let failedAt = 0;
+		const result = lm.setLicenseKey(KEY).catch((e: unknown) => {
+			failedAt = Date.now();
+			throw e;
+		});
+		await expect(settle(result)).rejects.toMatchObject({
+			code: "network_error",
+		});
+		expect(validateCalls()).toBeGreaterThan(1);
+		expect(failedAt - startedAt).toBeLessThanOrEqual(30 * 1000);
+	});
+
+	it("retries longer in the background", async () => {
+		serveValid();
+		const lm = make();
+		await lm.ready();
+		await lm.setLicenseKey(KEY);
+
+		let calls = 0;
+		validate = async (body) =>
+			++calls < 8
+				? Promise.reject(new TypeError("fetch failed"))
+				: ok(await sign({ sub: body.key, fp: body.fingerprint }));
+		await advance(2 * WEEK);
+		for (let i = 0; i < 60 && calls < 8; i++) await advance(5000);
+		await advance(0);
+		expect(calls).toBe(8);
+		expect(lm.getOfflineState()).toEqual({ mode: "online" });
+	});
+
+	it("stops retrying after dispose", async () => {
+		const lm = make();
+		await lm.ready();
+		const result = lm.setLicenseKey(KEY);
+		await advance(0);
+		lm.dispose();
+		await expect(settle(result)).rejects.toMatchObject({
+			code: "network_error",
+		});
+		expect(validateCalls()).toBe(1);
 	});
 });
 
@@ -501,19 +614,20 @@ describe("automatic refresh", () => {
 		await lm.setLicenseKey(KEY);
 
 		validate = () => fail(500, "internal_error");
-		await advance(2 * DAY);
-		expect(validateCalls()).toBe(2);
+		await advance(2 * DAY - 1000);
+		expect(validateCalls()).toBe(1);
+		// Retried for up to 5 min before giving up.
+		for (let i = 0; i < 60; i++) await advance(5000);
+		const afterFirstRound = validateCalls();
+		expect(afterFirstRound).toBeGreaterThan(2);
 		expect(lm.getState()).toBe("ACTIVE");
-		expect(lm.getOfflineState()).toMatchObject({
-			mode: "offline",
-			remainingMs: DAY,
-		});
+		expect(lm.getOfflineState()).toMatchObject({ mode: "offline" });
 
-		// 5 min, then 10 min backoff.
-		await advance(5 * 60 * 1000);
-		expect(validateCalls()).toBe(3);
-		await advance(10 * 60 * 1000);
-		expect(validateCalls()).toBe(4);
+		// Then 5 min until the next round.
+		await advance(4 * 60 * 1000);
+		expect(validateCalls()).toBe(afterFirstRound);
+		await advance(2 * 60 * 1000);
+		expect(validateCalls()).toBeGreaterThan(afterFirstRound);
 
 		await advance(DAY);
 		expect(lm.getState()).toBe("OFFLINE_EXPIRED");
@@ -542,7 +656,7 @@ describe("automatic refresh", () => {
 		expect(await lm.refresh()).toBe("ACTIVE");
 	});
 
-	it("handles lifetimes longer than setTimeout's limit", async () => {
+	it("handles lifetimes longer than the max timer step", async () => {
 		serveValid(90 * DAY);
 		const lm = make();
 		await lm.ready();
@@ -551,6 +665,18 @@ describe("automatic refresh", () => {
 		await vi.advanceTimersByTimeAsync(60 * DAY - 1000);
 		expect(validateCalls()).toBe(1);
 		await vi.advanceTimersByTimeAsync(1000);
+		expect(validateCalls()).toBe(2);
+	});
+
+	it("catches up within an hour when the wall clock jumps ahead", async () => {
+		serveValid();
+		const lm = make();
+		await lm.ready();
+		await lm.setLicenseKey(KEY);
+
+		// Simulates system sleep: wall time moves past the refresh point without timers firing.
+		vi.setSystemTime(Date.now() + 2 * WEEK);
+		await vi.advanceTimersByTimeAsync(HOUR);
 		expect(validateCalls()).toBe(2);
 	});
 

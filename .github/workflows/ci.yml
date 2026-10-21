@@ -13,6 +13,23 @@ permissions:
   contents: read
 
 jobs:
+  changeset:
+    # Every PR declares its version bump (or `pnpm changeset --empty` for none).
+    # Skipped on the "Version Packages" PR, which consumes the changesets.
+    if: github.event_name == 'pull_request' && github.head_ref != 'changeset-release/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm changeset status --since=origin/${{ github.base_ref }}
+
   lint:
     runs-on: ubuntu-latest
     steps:

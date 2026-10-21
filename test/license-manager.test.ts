@@ -219,6 +219,20 @@ describe("clock tamper detection (network time)", () => {
 	});
 });
 
+describe("getPortalUrl", () => {
+	it("links to the product's portal", () => {
+		expect(make("prod-1").getPortalUrl()).toBe(
+			"https://app.licensemanager.dev/portal/prod-1",
+		);
+	});
+
+	it("encodes the product ID", () => {
+		expect(make("a/b c").getPortalUrl()).toBe(
+			"https://app.licensemanager.dev/portal/a%2Fb%20c",
+		);
+	});
+});
+
 describe("dispose", () => {
 	it("stops the interval", () => {
 		const lm = make();
