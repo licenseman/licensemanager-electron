@@ -1,0 +1,69 @@
+{
+	"name": "@licenseman/electron",
+	"version": "0.0.0",
+	"description": "Electron SDK for licensemanager.dev",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist"
+	],
+	"sideEffects": false,
+	"engines": {
+		"node": ">=18"
+	},
+	"packageManager": "pnpm@12.10.1",
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"changeset": "changeset",
+		"release": "pnpm build && changeset publish",
+		"prepublishOnly": "pnpm build"
+	},
+	"peerDependencies": {
+		"electron": ">=28"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"keywords": [
+		"electron",
+		"license",
+		"licensing",
+		"licensemanager",
+		"sdk"
+	],
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.15",
+		"@changesets/cli": "^3.0.3",
+		"@types/node": "^26.6.5",
+		"@vitest/coverage-v8": "^5.0.5",
+		"electron": ">=28",
+		"tsup": "^9.0.0",
+		"typescript": "^6.0.3",
+		"vitest": "^5.0.5"
+	}
+}
