@@ -45,6 +45,9 @@
 	"peerDependencies": {
 		"electron": ">=28"
 	},
+	"optionalDependencies": {
+		"@napi-rs/keyring": "^2.1.2"
+	},
 	"publishConfig": {
 		"access": "public",
 		"provenance": true

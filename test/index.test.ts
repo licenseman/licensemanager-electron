@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SDK_NAME } from "../src/index";
+import { LicenseManager, SDK_NAME } from "../src/index";
 
-describe("@licenseman/electron", () => {
-	it("exports the SDK name", () => {
+describe("public entry point", () => {
+	it("exports the SDK name and LicenseManager", () => {
 		expect(SDK_NAME).toBe("@licenseman/electron");
+		expect(typeof LicenseManager).toBe("function");
 	});
 });
