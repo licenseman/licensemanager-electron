@@ -3,6 +3,14 @@
 	"version": "1.0.0",
 	"description": "Electron SDK for licensemanager.dev",
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/licenseman/licensemanager-electron.git"
+	},
+	"homepage": "https://github.com/licenseman/licensemanager-electron#readme",
+	"bugs": {
+		"url": "https://github.com/licenseman/licensemanager-electron/issues"
+	},
 	"type": "module",
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",

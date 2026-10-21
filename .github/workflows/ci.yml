@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  # Called by release.yml on pushes to main
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
