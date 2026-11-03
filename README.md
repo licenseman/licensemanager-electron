@@ -133,6 +133,23 @@ optional native `@napi-rs/keyring` dependency, namespaced by `productId` so
 multiple apps never overlap. When no keyring is available (e.g. headless Linux),
 the SDK transparently falls back to redundant copies in non-obvious files.
 
+Entries are stored under the `keychainService` name, which the OS shows when it
+asks the user for their password. It defaults to the app's bundle id on macOS
+(`CFBundleIdentifier`), and to `dev.licensemanager.sdk` elsewhere.
+
+Set `useKeychain: false` to use only the file fallback. It defaults to Electron's
+`app.isPackaged`, so running the app unpackaged in development never triggers
+keychain prompts.
+
+```ts
+new LicenseManager({
+  productId,
+  publicKey,
+  keychainService: "com.example.myapp",
+  useKeychain: true,
+});
+```
+
 ### Clock-tamper detection
 
 On construction and roughly once an hour, the SDK records the newest

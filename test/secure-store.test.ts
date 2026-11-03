@@ -102,6 +102,54 @@ describe("SecureStore keyring backend", () => {
 		expect(map.size).toBe(2);
 	});
 
+	it("uses the configured keychain service and backfills from files", () => {
+		const map = new Map<string, string>();
+		const Fake: EntryCtor = class {
+			#key: string;
+			constructor(service: string, account: string) {
+				this.#key = `${service}::${account}`;
+			}
+			getPassword(): string | null {
+				return map.get(this.#key) ?? null;
+			}
+			setPassword(value: string): void {
+				map.set(this.#key, value);
+			}
+		};
+		setKeyringLoaderForTests(() => null);
+		new SecureStore("prod-1", [dirA]).set("installId", "secret");
+
+		setKeyringLoaderForTests(() => Fake);
+		const store = new SecureStore("prod-1", [dirA], {
+			keychainService: "com.example.app",
+		});
+		expect(store.get("installId")).toBe("secret");
+		expect([...map.entries()]).toEqual([
+			["com.example.app::prod-1:installId", "secret"],
+		]);
+	});
+
+	it("skips the keyring when useKeychain is false", () => {
+		let constructed = 0;
+		const Counting: EntryCtor = class {
+			constructor() {
+				constructed++;
+			}
+			getPassword(): string | null {
+				return null;
+			}
+			setPassword(): void {}
+		};
+		setKeyringLoaderForTests(() => Counting);
+
+		const store = new SecureStore("prod-1", [dirA], { useKeychain: false });
+		store.set("installId", "secret");
+		expect(store.get("installId")).toBe("secret");
+		store.delete("installId");
+		expect(store.get("installId")).toBeNull();
+		expect(constructed).toBe(0);
+	});
+
 	it("falls back to files when the keyring throws", () => {
 		const Throwing: EntryCtor = class {
 			constructor() {

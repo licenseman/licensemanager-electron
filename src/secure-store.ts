@@ -4,8 +4,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { nodeRequire } from "./node-require.js";
 
-/** Keyring service shared by every app embedding the SDK. */
-const KEYRING_SERVICE = "dev.licensemanager.sdk";
+/**
+ * Default keyring service when the app has no bundle id, and the salt of the
+ * per-product file namespace (kept stable so fallback files never move).
+ */
+export const DEFAULT_KEYRING_SERVICE = "dev.licensemanager.sdk";
 
 /** Minimal shape of the lazily-loaded `@napi-rs/keyring` Entry. */
 interface KeyringEntry {
@@ -46,6 +49,16 @@ export function setKeyringLoaderForTests(
 	entryCtor = undefined;
 }
 
+export interface SecureStoreOptions {
+	/**
+	 * Keyring service name, shown by the OS when it asks the user for their
+	 * password. Defaults to {@link DEFAULT_KEYRING_SERVICE}.
+	 */
+	keychainService?: string | undefined;
+	/** False to skip the keyring and use only the file fallback. Default true. */
+	useKeychain?: boolean;
+}
+
 /**
  * Per-product persistence for small secret strings (install ID, last-seen
  * timestamp, license key and token).
@@ -63,11 +76,19 @@ export class SecureStore {
 	/** GUID-looking per-product id with no "license" marker. */
 	readonly #namespace: string;
 	readonly #dirs: string[];
+	readonly #service: string;
+	readonly #useKeychain: boolean;
 
-	constructor(productId: string, storageDirs?: string[]) {
+	constructor(
+		productId: string,
+		storageDirs?: string[],
+		options: SecureStoreOptions = {},
+	) {
 		this.#productId = productId;
+		this.#service = options.keychainService || DEFAULT_KEYRING_SERVICE;
+		this.#useKeychain = options.useKeychain ?? true;
 		this.#namespace = createHash("sha256")
-			.update(`${KEYRING_SERVICE}:${productId}`)
+			.update(`${DEFAULT_KEYRING_SERVICE}:${productId}`)
 			.digest("hex")
 			.slice(0, 32);
 		this.#dirs = storageDirs ?? defaultDirs(this.#namespace);
@@ -76,7 +97,10 @@ export class SecureStore {
 	get(key: string): string | null {
 		const fromKeyring = this.#keyringGet(key);
 		if (fromKeyring !== null) return fromKeyring;
-		return this.#fileGet(key);
+		const fromFile = this.#fileGet(key);
+		// Backfill the keyring, e.g. after the service name changed.
+		if (fromFile !== null) this.#keyringSet(key, fromFile);
+		return fromFile;
 	}
 
 	set(key: string, value: string): void {
@@ -100,10 +124,11 @@ export class SecureStore {
 	}
 
 	#entry(key: string): KeyringEntry | null {
+		if (!this.#useKeychain) return null;
 		const Ctor = getEntryCtor();
 		if (!Ctor) return null;
 		try {
-			return new Ctor(KEYRING_SERVICE, `${this.#productId}:${key}`);
+			return new Ctor(this.#service, `${this.#productId}:${key}`);
 		} catch {
 			return null;
 		}

@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { ClockGuard } from "./clock.js";
-import { defaultPlatform, electronAppVersion } from "./environment.js";
+import {
+	appBundleId,
+	defaultPlatform,
+	electronAppIsPackaged,
+	electronAppVersion,
+} from "./environment.js";
 import {
 	type MachineFingerprint,
 	resolveMachineFingerprint,
@@ -89,6 +94,18 @@ export interface LicenseManagerOptions {
 	 * validity remains — but never sooner than 1 day after the last validation.
 	 */
 	minOfflineDurationMs?: number;
+	/**
+	 * Keychain service name the license data is stored under — the label the
+	 * OS shows when it asks the user for their password. Defaults to the app's
+	 * bundle id (macOS), else `dev.licensemanager.sdk`.
+	 */
+	keychainService?: string;
+	/**
+	 * Store license data in the OS secret store. When false, only the file
+	 * fallback is used. Defaults to `app.isPackaged`, so development builds
+	 * never trigger keychain prompts; true outside Electron.
+	 */
+	useKeychain?: boolean;
 	/** Override the API origin. Intended for tests. */
 	apiBaseUrl?: string;
 	/** Override persistence locations. Intended for tests. */
@@ -148,7 +165,10 @@ export class LicenseManager {
 			/\/+$/,
 			"",
 		);
-		this.#store = new SecureStore(options.productId, options.storageDirs);
+		this.#store = new SecureStore(options.productId, options.storageDirs, {
+			keychainService: options.keychainService ?? appBundleId(),
+			useKeychain: options.useKeychain ?? electronAppIsPackaged() ?? true,
+		});
 		this.#verifier = new TokenVerifier(
 			options.publicKey,
 			options.productId,
