@@ -1,5 +1,11 @@
 # @licenseman/electron
 
+## 1.2.0
+
+### Minor Changes
+
+- [`2945349`](https://github.com/licenseman/licensemanager-electron/commit/2945349be2cfd84bc53ba9782d093c5fd9d21a03) Thanks [@nick-keller](https://github.com/nick-keller)! - Add `keychainService` (defaults to the app's bundle id) and `useKeychain` (defaults to `app.isPackaged`, so development builds use only the file fallback) options.
+
 ## 1.1.0
 
 ### Minor Changes
