@@ -21,6 +21,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, to tag releases on the commit that set the version
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -56,8 +59,7 @@ jobs:
           git fetch origin "${{ steps.merge.outputs.sha }}"
           git checkout --detach "${{ steps.merge.outputs.sha }}"
 
-      # No changesets left on the merge commit, so this publishes to npm,
-      # pushes tags and creates GitHub releases.
+      # No changesets left on the merge commit, so this publishes to npm.
       - name: Publish
         if: steps.merge.outputs.sha != ''
         uses: changesets/action@v1
@@ -66,3 +68,32 @@ jobs:
           version: pnpm changeset version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # changesets/action doesn't detect publishes from the current changesets
+      # CLI output, so it never pushes tags or creates GitHub releases. Create
+      # the release (and its tag) for the current version once it is on npm.
+      - name: Create GitHub release
+        if: steps.changesets.outputs.hasChangesets == 'false' || steps.merge.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          # Retry briefly: a fresh publish can take a moment to show up.
+          for attempt in 1 2 3 4 5; do
+            npm view "$name@$version" version > /dev/null 2>&1 && break
+            if [ "$attempt" = 5 ]; then
+              echo "$name@$version is not on npm, skipping release"
+              exit 0
+            fi
+            sleep 10
+          done
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag already exists"
+            exit 0
+          fi
+          awk -v v="$version" '$0 == "## " v { f = 1; next } /^## / { if (f) exit } f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          # The commit that set the version, not HEAD
+          target=$(git log -1 --format=%H -G'"version"' -- package.json)
+          gh release create "$tag" --target "$target" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
