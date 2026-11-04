@@ -101,6 +101,7 @@ function make(options: Partial<LicenseManagerOptions> = {}): LicenseManager {
 		productId: PRODUCT_ID,
 		publicKey: publicKeyPem,
 		fingerprint: "fixed-machine",
+		machineName: "Test Machine",
 		version: "2.3.1",
 		apiBaseUrl: "https://api.test",
 		storageDirs: [dir],

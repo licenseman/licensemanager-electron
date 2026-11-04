@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { hostname } from "node:os";
 import { ClockGuard } from "./clock.js";
 import {
 	appBundleId,
+	defaultMachineName,
 	defaultPlatform,
 	electronAppIsPackaged,
 	electronAppVersion,
@@ -84,9 +84,17 @@ export interface LicenseManagerOptions {
 	 * license's max version. Defaults to Electron's `app.getVersion()`.
 	 */
 	version?: string;
-	/** Machine name shown in the dashboard. Defaults to the hostname. */
+	/**
+	 * Machine name shown in the dashboard. Defaults to the computer name
+	 * (`scutil --get ComputerName` on macOS, the pretty hostname on Linux),
+	 * else the hostname.
+	 */
 	machineName?: string;
-	/** Platform shown in the dashboard. Defaults to macOS, Windows or Linux. */
+	/**
+	 * Platform shown in the dashboard. Defaults to the OS name and version,
+	 * e.g. `macOS 26.5.1`, `Windows 11 (10.0.22631)` or
+	 * `Linux (Ubuntu 24.04.1 LTS)`.
+	 */
 	platform?: string;
 	/**
 	 * How long the app must keep working offline. The license is re-validated
@@ -124,7 +132,9 @@ export class LicenseManager {
 	readonly #productId: string;
 	readonly #fingerprintOption: MachineFingerprint | undefined;
 	readonly #version: string | undefined;
-	readonly #machineName: string;
+	/** The `machineName` option, else the default once looked up. */
+	#machineName: string | undefined;
+	#machineNameLookup: Promise<string> | undefined;
 	readonly #platform: string;
 	readonly #minOfflineDurationMs: number;
 	readonly #apiBaseUrl: string;
@@ -158,7 +168,7 @@ export class LicenseManager {
 		this.#productId = options.productId;
 		this.#fingerprintOption = options.fingerprint;
 		this.#version = options.version;
-		this.#machineName = options.machineName ?? hostname();
+		this.#machineName = options.machineName;
 		this.#platform = options.platform ?? defaultPlatform();
 		this.#minOfflineDurationMs = options.minOfflineDurationMs ?? 0;
 		this.#apiBaseUrl = (options.apiBaseUrl ?? DEFAULT_API_BASE_URL).replace(
@@ -467,12 +477,21 @@ export class LicenseManager {
 		return promise;
 	}
 
+	/** Look up the default machine name once, sharing concurrent lookups. */
+	#lookupMachineName(): Promise<string> {
+		this.#machineNameLookup ??= defaultMachineName().then((name) => {
+			this.#machineName = name;
+			return name;
+		});
+		return this.#machineNameLookup;
+	}
+
 	async #fetchToken(key: string, policy: RetryPolicy): Promise<ValidatedToken> {
 		const request = {
 			key,
 			fingerprint: await this.getFingerprint(),
 			version: this.#resolveVersion(),
-			name: this.#machineName,
+			name: this.#machineName ?? (await this.#lookupMachineName()),
 			platform: this.#platform,
 		};
 		const { token, status } = await withRetry(

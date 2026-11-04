@@ -98,9 +98,11 @@ caller is waiting (startup without a valid stored token, `setLicenseKey()`,
 `refresh()`), and up to 5 minutes for background validations. Answers about the key are never
 retried.
 
-`version` (defaults to Electron's `app.getVersion()`) and `platform` (macOS,
-Windows or Linux by default) are sent with every validation, along with
-`machineName` (the hostname by default). While offline, `version` is also
+`version` (defaults to Electron's `app.getVersion()`) and `platform` (the OS
+name and version by default, e.g. `macOS 26.5.1`, `Windows 11 (10.0.22631)` or
+`Linux (Ubuntu 24.04.1 LTS)`) are sent with every validation, along with
+`machineName` (by default the computer name, e.g. "Jane's MacBook Pro" from
+`scutil --get ComputerName` on macOS, else the hostname). While offline, `version` is also
 checked against the token's max version (`mv`): a stored token for 2.x refuses
 3.0 with `VERSION_NOT_ALLOWED` until the server can be reached, since online the
 server's answer is authoritative.
