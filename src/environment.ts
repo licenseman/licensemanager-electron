@@ -101,21 +101,21 @@ export async function defaultMachineName(): Promise<string> {
 
 /** Electron's `app.getVersion()`, or undefined outside the main process. */
 export function electronAppVersion(): string | undefined {
-	try {
-		const electron = nodeRequire("electron") as {
-			app?: { getVersion(): string };
-		};
-		return electron.app?.getVersion();
-	} catch {
-		return undefined;
-	}
+	return electronApp()?.getVersion?.();
 }
 
 interface ElectronApp {
 	isPackaged?: boolean;
+	getVersion?(): string;
 }
 
+/**
+ * Electron's `app`, or undefined outside the main process. Outside Electron,
+ * `require("electron")` resolves the npm package instead, which may try to
+ * download the Electron binary, so it is only required inside Electron.
+ */
 function electronApp(): ElectronApp | undefined {
+	if (!process.versions.electron) return undefined;
 	try {
 		const electron = nodeRequire("electron") as { app?: ElectronApp };
 		return electron.app;
