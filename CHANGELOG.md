@@ -1,5 +1,15 @@
 # @licenseman/electron
 
+## 1.3.0
+
+### Minor Changes
+
+- [`21dacb0`](https://github.com/licenseman/licensemanager-electron/commit/21dacb06b2e66b78d9ad15d8804fa224c53933c2) Thanks [@nick-keller](https://github.com/nick-keller)! - The default `platform` now includes the OS version (e.g. `macOS 26.5.1`, `Windows 11 (10.0.22631)`, `Linux (Ubuntu 24.04.1 LTS)`), and the default `machineName` is the user-facing computer name (`scutil --get ComputerName` on macOS, the pretty hostname on Linux) instead of the network hostname.
+
+### Patch Changes
+
+- [`f3f8033`](https://github.com/licenseman/licensemanager-electron/commit/f3f8033fd4636bef40a762c669476f54fa3c3805) Thanks [@nick-keller](https://github.com/nick-keller)! - Only `require("electron")` when running inside Electron. In plain Node, requiring the `electron` npm package could trigger a download of the Electron binary.
+
 ## 1.2.0
 
 ### Minor Changes
