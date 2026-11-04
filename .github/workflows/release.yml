@@ -31,6 +31,36 @@ jobs:
       - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
       - uses: changesets/action@v1
+        id: changesets
+        with:
+          publish: pnpm release
+          version: pnpm changeset version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Auto-merge the "Version Packages" PR. Merges made with GITHUB_TOKEN do not
+      # trigger a new workflow run, so publish from the merge commit in this job.
+      - name: Merge Version Packages PR
+        id: merge
+        if: steps.changesets.outputs.pullRequestNumber != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.changesets.outputs.pullRequestNumber }}
+        run: |
+          gh pr merge "$PR" --merge --delete-branch
+          echo "sha=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out merge commit
+        if: steps.merge.outputs.sha != ''
+        run: |
+          git fetch origin "${{ steps.merge.outputs.sha }}"
+          git checkout --detach "${{ steps.merge.outputs.sha }}"
+
+      # No changesets left on the merge commit, so this publishes to npm,
+      # pushes tags and creates GitHub releases.
+      - name: Publish
+        if: steps.merge.outputs.sha != ''
+        uses: changesets/action@v1
         with:
           publish: pnpm release
           version: pnpm changeset version
