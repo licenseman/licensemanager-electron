@@ -7,7 +7,7 @@
 		"type": "git",
 		"url": "git+https://github.com/licenseman/licensemanager-electron.git"
 	},
-	"homepage": "https://github.com/licenseman/licensemanager-electron#readme",
+	"homepage": "https://licensemanager.dev/docs/electron",
 	"bugs": {
 		"url": "https://github.com/licenseman/licensemanager-electron/issues"
 	},
