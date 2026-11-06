@@ -2,6 +2,8 @@
 
 Electron SDK for [licensemanager.dev](https://licensemanager.dev).
 
+**[Documentation](https://licensemanager.dev/docs/electron)** · **[API reference](https://api.licensemanager.dev/docs)** · **[Changelog](CHANGELOG.md)**
+
 ## Install
 
 ```sh
