@@ -80,14 +80,14 @@ jobs:
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           tag="v$version"
-          # Retry briefly: a fresh publish can take a moment to show up.
-          for attempt in 1 2 3 4 5; do
-            npm view "$name@$version" version > /dev/null 2>&1 && break
-            if [ "$attempt" = 5 ]; then
+          # A fresh publish can take a few minutes to show up on npm.
+          for attempt in $(seq 1 20); do
+            npm view "$name@$version" version --prefer-online > /dev/null 2>&1 && break
+            if [ "$attempt" = 20 ]; then
               echo "$name@$version is not on npm, skipping release"
               exit 0
             fi
-            sleep 10
+            sleep 15
           done
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "Release $tag already exists"
