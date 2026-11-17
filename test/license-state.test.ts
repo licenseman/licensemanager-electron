@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, type KeyLike, SignJWT } from "jose";
@@ -250,6 +250,12 @@ describe("startup", () => {
 			name: "Jane's MacBook",
 			platform: "macOS",
 		});
+		const { version } = JSON.parse(
+			readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+		) as { version: string };
+		expect(new Headers(init.headers).get("user-agent")).toBe(
+			`licensemanager-electron/${version} (node/${process.versions.node}; ${process.platform} ${process.arch})`,
+		);
 	});
 
 	it.each([

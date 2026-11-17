@@ -1,4 +1,5 @@
 import { LicenseError, type LicenseErrorCode } from "./license-errors.js";
+import { userAgent } from "./user-agent.js";
 
 export const DEFAULT_API_BASE_URL = "https://api.licensemanager.dev";
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -41,7 +42,10 @@ export async function postValidateKey(
 			`${apiBaseUrl}/v1/products/${encodeURIComponent(productId)}/validate-key`,
 			{
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: {
+					"Content-Type": "application/json",
+					"User-Agent": userAgent(),
+				},
 				body: JSON.stringify(request),
 				signal: AbortSignal.timeout(
 					Math.max(0, Math.min(timeoutMs, REQUEST_TIMEOUT_MS)),
