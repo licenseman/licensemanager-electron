@@ -1,5 +1,11 @@
 # @licenseman/electron
 
+## 1.4.0
+
+### Minor Changes
+
+- [`e58dd56`](https://github.com/licenseman/licensemanager-electron/commit/e58dd5628cca7f41abf38ec5fc42409f1ddef41c) Thanks [@nick-keller](https://github.com/nick-keller)! - Send a `User-Agent` header naming the SDK, its version, and the Electron, Node and OS versions (`licensemanager-electron/1.4.0 (electron/33.0.0; node/22.11.0; darwin arm64)`), so the dashboard can tell where validations come from.
+
 ## 1.3.0
 
 ### Minor Changes
